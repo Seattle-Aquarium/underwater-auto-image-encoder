@@ -49,6 +49,8 @@ training:
                          # Saves ~1.5-2GB memory from optimizer states
   compile: false  # Use torch.compile for potential speedups and memory optimization
                   # Requires PyTorch 2.0+, may have longer first-epoch compilation time
+  early_stopping: 15  # Early stopping patience - stop if val loss doesn't improve for N epochs
+                      # Set to 0 to disable early stopping
 
 # Step Control (skip completed steps)
 steps:
