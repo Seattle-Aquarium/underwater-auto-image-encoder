@@ -278,6 +278,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--early-stopping',
+        type=int,
+        default=None,
+        help='Early stopping patience - stop if val loss does not improve for N epochs (default: 15, 0 to disable)'
+    )
+
+    parser.add_argument(
         '--random-crop',
         action='store_true',
         help='Use random crops at native resolution instead of resizing (preserves detail)'
@@ -376,6 +383,8 @@ Examples:
     use_random_crop = args.random_crop or training_config.get('random_crop', False)
     # Crops per image (only used when random_crop is enabled)
     crops_per_image = args.crops_per_image or training_config.get('crops_per_image', 8)
+    # Early stopping patience
+    early_stopping = args.early_stopping if args.early_stopping is not None else training_config.get('early_stopping', 15)
 
     # Step control
     steps_config = config.get('steps', {})
@@ -562,6 +571,8 @@ Examples:
     if use_random_crop:
         cmd.append('--random-crop')
         cmd.extend(['--crops-per-image', str(crops_per_image)])
+
+    cmd.extend(['--early-stopping', str(early_stopping)])
 
     run_command(cmd, "Train underwater enhancement model")
 
