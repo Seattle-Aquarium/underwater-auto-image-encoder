@@ -123,12 +123,48 @@ def create_ushape_checkpoint(path: Path, img_dim: int = TEST_USHAPE_IMG_DIM, leg
     return path
 
 
+def create_lut3d_checkpoint(path: Path, lut_dim: int = 9, lut_num: int = 3):
+    """Create a minimal 3D LUT checkpoint for testing.
+
+    Uses a small lut_dim for speed; the model is resolution-independent so the
+    LUT grid size is unrelated to the test image size.
+    """
+    from src.models.lut_3d import LUT3D
+
+    model = LUT3D(n_channels=3, n_luts=lut_num, lut_dim=lut_dim)
+
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'epoch': 1,
+        'val_loss': 0.1,
+        'model_config': {
+            'n_channels': 3,
+            'n_classes': 3,
+            'image_size': TEST_IMAGE_SIZE,
+            'model': '3d_lut',
+            'lut_dim': lut_dim,
+            'lut_num': lut_num,
+        }
+    }
+
+    torch.save(checkpoint, path)
+    return path
+
+
 @pytest.fixture(scope="session")
 def unet_checkpoint_path(tmp_path_factory):
     """Create a UNet checkpoint for testing"""
     tmp_dir = tmp_path_factory.mktemp("checkpoints")
     checkpoint_path = tmp_dir / "unet_test.pth"
     return create_unet_checkpoint(checkpoint_path)
+
+
+@pytest.fixture(scope="session")
+def lut3d_checkpoint_path(tmp_path_factory):
+    """Create a 3D LUT checkpoint for testing"""
+    tmp_dir = tmp_path_factory.mktemp("checkpoints")
+    checkpoint_path = tmp_dir / "lut3d_test.pth"
+    return create_lut3d_checkpoint(checkpoint_path)
 
 
 @pytest.fixture(scope="session")

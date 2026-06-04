@@ -249,8 +249,31 @@ Examples:
         '--model',
         type=str,
         default=None,
-        choices=['unet', 'ushape_transformer', 'ss_uie'],
-        help='Model architecture: unet, ushape_transformer, or ss_uie'
+        choices=['unet', 'ushape_transformer', 'ss_uie', '3d_lut'],
+        help='Model architecture: unet, ushape_transformer, ss_uie, or 3d_lut'
+    )
+
+    parser.add_argument(
+        '--loss',
+        type=str,
+        default=None,
+        choices=['auto', 'combined', 'composite', 'ss_uie'],
+        help="Loss function (default: auto, picks per model). 'composite' = "
+             "L1 + MS-SSIM + Focal Frequency (+ optional LPIPS) for texture preservation."
+    )
+
+    parser.add_argument(
+        '--lut-dim',
+        type=int,
+        default=None,
+        help='3D LUT grid resolution per axis (default: 33, only used for --model 3d_lut)'
+    )
+
+    parser.add_argument(
+        '--lut-num',
+        type=int,
+        default=None,
+        help='Number of basis 3D LUTs to fuse (default: 3, only used for --model 3d_lut)'
     )
 
     parser.add_argument(
@@ -371,6 +394,9 @@ Examples:
     checkpoint_dir = args.checkpoint_dir or training_config.get('checkpoint_dir', 'checkpoints')
     resume = args.resume or training_config.get('resume')
     model = args.model or training_config.get('model', 'unet')
+    loss = args.loss or training_config.get('loss', 'auto')
+    lut_dim = args.lut_dim or training_config.get('lut_dim', 33)
+    lut_num = args.lut_num or training_config.get('lut_num', 3)
     # Handle amp: CLI flag takes precedence (when True), then config, default False
     use_amp = args.amp or training_config.get('amp', False)
     # Handle gradient_checkpointing: CLI flag takes precedence (when True), then config, default False
@@ -552,6 +578,12 @@ Examples:
         '--checkpoint-dir', checkpoint_dir,
         '--model', model
     ]
+
+    if loss and loss != 'auto':
+        cmd.extend(['--loss', loss])
+
+    if model == '3d_lut':
+        cmd.extend(['--lut-dim', str(lut_dim), '--lut-num', str(lut_num)])
 
     if resume:
         cmd.extend(['--resume', resume])

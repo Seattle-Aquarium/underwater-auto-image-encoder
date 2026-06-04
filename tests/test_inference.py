@@ -40,6 +40,41 @@ class TestModelDetection:
         model_type = inferencer._detect_model_type(checkpoint)
         assert model_type == 'UShapeTransformer'
 
+    def test_detect_lut3d_model(self, lut3d_checkpoint_path):
+        """3D LUT checkpoints should be detected by their 'luts' key"""
+        checkpoint = torch.load(lut3d_checkpoint_path, map_location='cpu')
+        inferencer = Inferencer.__new__(Inferencer)
+        model_type = inferencer._detect_model_type(checkpoint)
+        assert model_type == 'LUT3D'
+
+
+class TestLUT3DInference:
+    """Tests for 3D LUT model inference"""
+
+    def test_load_lut3d_checkpoint(self, lut3d_checkpoint_path):
+        """3D LUT checkpoint should load successfully with correct LUT shape"""
+        inferencer = Inferencer(str(lut3d_checkpoint_path))
+        assert inferencer.model is not None
+        assert inferencer.detected_model_type == 'LUT3D'
+        assert inferencer.config['model']['lut_dim'] == 9
+        assert inferencer.config['model']['lut_num'] == 3
+
+    def test_lut3d_inference_single_image(self, lut3d_checkpoint_path, test_image_path):
+        """3D LUT should process a single image successfully"""
+        inferencer = Inferencer(str(lut3d_checkpoint_path))
+        result = inferencer.process_image(test_image_path)
+
+        assert result is not None
+        assert isinstance(result, Image.Image)
+        assert result.mode == 'RGB'
+
+    def test_lut3d_output_shape_matches_input(self, lut3d_checkpoint_path, test_image_path):
+        """3D LUT processes at native resolution: output size == input size"""
+        original = Image.open(test_image_path)
+        inferencer = Inferencer(str(lut3d_checkpoint_path))
+        result = inferencer.process_image(test_image_path)
+        assert result.size == original.size
+
 
 class TestUNetInference:
     """Tests for UNet model inference"""

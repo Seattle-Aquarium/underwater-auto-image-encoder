@@ -37,10 +37,18 @@ training:
   output_dir: "output"  # Output directory for trained models
   checkpoint_dir: "checkpoints"  # Checkpoint directory
   resume: null  # Resume from checkpoint (null = start fresh)
-  model: "ss_uie"  # Model architecture: "unet", "ushape_transformer", or "ss_uie"
+  model: "ss_uie"  # Model architecture: "unet", "ushape_transformer", "ss_uie", or "3d_lut"
                  # unet: Standard U-Net autoencoder (~31M params)
                  # ushape_transformer: U-shape Transformer with CMSFFT+SGFMT (~50M params)
                  # ss_uie: State-Space UIE with Mamba blocks + FFT attention (requires CUDA + mamba-ssm)
+                 # 3d_lut: Image-adaptive 3D LUT - per-pixel colour transform, preserves
+                 #         fine texture by construction; ideal for mostly-global Lightroom edits
+  loss: "auto"  # Loss function: "auto" (per-model default), "combined" (L1+MSE),
+                # "composite" (L1 + MS-SSIM + Focal Frequency [+ LPIPS], texture-preserving),
+                # or "ss_uie". 'auto' uses composite for 3d_lut, ss_uie loss for ss_uie,
+                # combined otherwise.
+  lut_dim: 33  # 3D LUT grid resolution per axis (only used when model: 3d_lut)
+  lut_num: 3   # Number of basis 3D LUTs to fuse (only used when model: 3d_lut)
   amp: false  # Enable automatic mixed precision (FP16) training
               # Reduces memory usage by ~40-50%, recommended for large models/images
   gradient_checkpointing: false  # Enable gradient checkpointing for memory-efficient training

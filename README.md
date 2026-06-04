@@ -31,6 +31,9 @@ The most important parameters are:
 - **model** - Model architecture to use:
   - `unet` - Standard U-Net autoencoder (~31M params) - faster training, good baseline
   - `ushape_transformer` - U-shape Transformer with CMSFFT+SGFMT (~31M params) - better quality, slower training
+  - `ss_uie` - State-Space UIE (Mamba + FFT) - requires CUDA + `mamba-ssm`
+  - `3d_lut` - Image-adaptive 3D LUT (<1M params) - per-pixel colour transform that preserves fine texture by construction; best for mostly-global (Lightroom-style) edits
+- **loss** - Loss function: `auto` (per-model default), `combined` (L1+MSE), `composite` (L1 + MS-SSIM + Focal Frequency, texture-preserving), or `ss_uie`
 - **repo_id** - Which hugging face dataset to download and train with
 - **image_size** - What size of images to train on. Ideally this should be as large as your GPU memory allows.
 - **batch_size** - How many images to process at once. Again, larger is better, but limited by GPU memory.
@@ -87,6 +90,10 @@ https://huggingface.co/datasets/Seattle-Aquarium/Seattle_Aquarium_benthic_imager
 - [Project Discussion & Sample Data](https://github.com/Seattle-Aquarium/CCR_image_processing)
 - [U-Net Paper](https://arxiv.org/abs/1505.04597)
 - [U-shape Transformer for Underwater Image Enhancement](https://github.com/LintaoPeng/U-shape_Transformer_for_Underwater_Image_Enhancement) - Lintao Peng et al.
+- [SS-UIE: Adaptive Dual-domain Learning for Underwater Image Enhancement](https://github.com/LintaoPeng/SS-UIE) - Lintao Peng et al. (AAAI 2025)
+- [Learning Image-Adaptive 3D Lookup Tables for High Performance Photo Enhancement in Real-Time](https://arxiv.org/abs/2009.14468) - Hui Zeng et al. (ECCV 2020 / TPAMI 2020) - basis for the `3d_lut` model ([code](https://github.com/HuiZeng/Image-Adaptive-3DLUT))
+- [Focal Frequency Loss for Image Reconstruction and Synthesis](https://arxiv.org/abs/2012.12821) - Liming Jiang et al. (ICCV 2021) - frequency term in the composite loss
+- [Loss Functions for Image Restoration with Neural Networks](https://arxiv.org/abs/1511.08861) - Hang Zhao et al. (IEEE TCI 2017) - MS-SSIM + L1 mixed loss
 
 ## Contributing
 
