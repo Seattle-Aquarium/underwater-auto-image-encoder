@@ -22,6 +22,7 @@ from src.models.unet_autoencoder import UNetAutoencoder, LightweightUNet
 from src.models.attention_unet import AttentionUNet
 from src.models.ushape_transformer import UShapeTransformer
 from src.models.ss_uie import SSUIEModel, is_ss_uie_available, get_ss_uie_unavailable_reason
+from src.models.lut_3d import LUT3D
 
 # Colab-compatible model blocks (matching exact architecture from notebook)
 class ColabDoubleConv(torch.nn.Module):
@@ -175,6 +176,11 @@ class Inferencer:
             logger.info("Detected SS-UIE model from checkpoint")
             return 'SSUIEModel'
 
+        # Check for image-adaptive 3D LUT specific keys
+        if any(key == 'luts' or key.startswith('weight_head') for key in keys):
+            logger.info("Detected image-adaptive 3D LUT model from checkpoint")
+            return 'LUT3D'
+
         # Check for U-Shape Transformer specific keys
         if any(key.startswith('mtc.') for key in keys):
             logger.info("Detected U-Shape Transformer model from checkpoint")
@@ -188,6 +194,19 @@ class Inferencer:
         # Default to standard U-Net
         logger.info("Detected standard U-Net model from checkpoint")
         return 'UNetAutoencoder'
+
+    @staticmethod
+    def _lut_shape_from_checkpoint(checkpoint):
+        """Derive (lut_dim, lut_num) from a 3D LUT checkpoint's 'luts' tensor.
+
+        Falls back to the training defaults (33, 3) if the tensor is absent.
+        """
+        state_dict = checkpoint.get('model_state_dict', {})
+        for key, val in state_dict.items():
+            if key.replace('_orig_mod.', '') == 'luts':
+                # luts shape: [n_luts, 3, dim, dim, dim]
+                return int(val.shape[2]), int(val.shape[0])
+        return 33, 3
 
     def _create_default_config(self, checkpoint):
         """Create default config for Colab-trained models"""
@@ -229,6 +248,15 @@ class Inferencer:
                     'num_memblock': 4,  # Paper default
                     'num_resblock': 4,  # Paper default
                 })
+            elif self.detected_model_type == 'LUT3D':
+                lut_dim, lut_num = self._lut_shape_from_checkpoint(checkpoint)
+                config['model'].update({
+                    'lut_dim': model_config.get('lut_dim', lut_dim),
+                    'lut_num': model_config.get('lut_num', lut_num),
+                })
+                # 3D LUT is resolution-independent and per-pixel: process at native
+                # resolution to preserve fine texture (the point of this model).
+                config['inference']['resize_inference'] = False
             else:
                 config['model'].update({
                     'base_features': 64,
@@ -275,6 +303,10 @@ class Inferencer:
                     'num_memblock': 4,  # Paper default
                     'num_resblock': 4,  # Paper default
                 })
+            elif self.detected_model_type == 'LUT3D':
+                lut_dim, lut_num = self._lut_shape_from_checkpoint(checkpoint)
+                config['model'].update({'lut_dim': lut_dim, 'lut_num': lut_num})
+                config['inference']['resize_inference'] = False
             else:
                 config['model'].update({
                     'base_features': 64,
@@ -335,6 +367,12 @@ class Inferencer:
                 'W': self.config['model'].get('W', 256),
             }
             self.model = SSUIEModel(**model_params)
+        elif model_type == 'LUT3D':
+            self.model = LUT3D(
+                n_channels=self.config['model']['n_channels'],
+                n_luts=self.config['model'].get('lut_num', 3),
+                lut_dim=self.config['model'].get('lut_dim', 33),
+            )
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 
@@ -549,6 +587,28 @@ class Inferencer:
         # Check model type and inference settings
         model_type = self.config['model']['type']
         resize_inference = self.config.get('inference', {}).get('resize_inference', False)
+
+        # 3D LUT: a single global, per-pixel colour transform that is resolution-
+        # independent. Always process the whole image in ONE forward pass -- never
+        # tile and never resize. Tiling would run the weight-predictor on each tile
+        # separately, applying a *different* LUT to each region (colour seams); and
+        # resizing would apply the LUT at low resolution then upscale, blurring away
+        # the fine texture this model exists to preserve. No padding is needed:
+        # grid_sample handles any H x W and the predictor resizes to 256 internally.
+        if model_type == 'LUT3D':
+            logger.info(f"Processing {width}x{height} image whole at native resolution (3D LUT)")
+            if progress_callback:
+                progress_callback(f"Processing {width}x{height} image at native resolution")
+            input_tensor = self.transform(img).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                output_tensor = self.model(input_tensor)
+            output_img = self.inverse_transform(output_tensor.squeeze(0).cpu())
+
+            if output_path:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_img.save(output_path, quality=95)
+                logger.info(f"Saved enhanced image to {output_path}")
+            return output_img
 
         # Determine tile size threshold based on model type
         if model_type == 'UShapeTransformer':

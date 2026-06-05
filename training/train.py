@@ -32,6 +32,8 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.ushape_transformer import UShapeTransformer
 from src.models.ss_uie import SSUIEModel, is_ss_uie_available
+from src.models.lut_3d import LUT3D
+from src.losses import CompositeLoss
 
 # Set up logging
 logging.basicConfig(
@@ -405,6 +407,16 @@ def load_split(split_file, num_files):
         return train_indices, val_indices
 
 
+def get_model_regularization(model):
+    """Return a model's self-regularization term (e.g. 3D LUT smoothness/monotonicity).
+
+    Returns 0.0 for models without one. Unwraps torch.compile's ``_orig_mod``.
+    """
+    target = getattr(model, '_orig_mod', model)
+    reg_fn = getattr(target, 'regularization_loss', None)
+    return reg_fn() if callable(reg_fn) else 0.0
+
+
 def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None, use_amp=False):
     """Train for one epoch with optional mixed precision"""
     model.train()
@@ -422,7 +434,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None, us
                 # Mixed precision forward pass
                 with autocast(device_type=device.type, dtype=torch.float16):
                     outputs = model(inputs)
-                    loss = criterion(outputs, targets)
+                    loss = criterion(outputs, targets) + get_model_regularization(model)
 
                 # Scaled backward pass
                 scaler.scale(loss).backward()
@@ -431,7 +443,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None, us
             else:
                 # Standard forward pass
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss = criterion(outputs, targets) + get_model_regularization(model)
                 loss.backward()
                 optimizer.step()
 
@@ -515,10 +527,34 @@ def main():
     # Loss configuration
     parser.add_argument('--l1-weight', type=float, default=0.8, help='L1 loss weight (default: 0.8)')
     parser.add_argument('--mse-weight', type=float, default=0.2, help='MSE loss weight (default: 0.2)')
+    parser.add_argument('--loss', type=str, default='auto',
+                       choices=['auto', 'combined', 'composite', 'ss_uie'],
+                       help="Loss function. 'auto' (default) picks per model: ss_uie->ss_uie, "
+                            "3d_lut->composite, others->combined. 'composite' = L1 + MS-SSIM + "
+                            "Focal Frequency (+ optional LPIPS) for texture preservation.")
+    parser.add_argument('--composite-weights', type=float, nargs=4,
+                       metavar=('L1', 'MSSSIM', 'FFL', 'LPIPS'),
+                       default=[1.0, 1.0, 1.0, 0.0],
+                       help='Weights for the composite loss terms: L1 MS-SSIM FFL LPIPS '
+                            '(default: 1.0 1.0 1.0 0.0; LPIPS 0 disables it and avoids the lpips dep)')
 
     # Model selection
-    parser.add_argument('--model', type=str, default='unet', choices=['unet', 'ushape_transformer', 'ss_uie'],
+    parser.add_argument('--model', type=str, default='unet',
+                       choices=['unet', 'ushape_transformer', 'ss_uie', '3d_lut'],
                        help='Model architecture (default: unet)')
+
+    # 3D LUT configuration
+    parser.add_argument('--lut-dim', type=int, default=33,
+                       help='3D LUT grid resolution per axis (default: 33)')
+    parser.add_argument('--lut-num', type=int, default=3,
+                       help='Number of basis 3D LUTs to fuse (default: 3)')
+    parser.add_argument('--lut-lr-mult', type=float, default=10.0,
+                       help='Learning-rate multiplier for the 3D LUT basis entries '
+                            'relative to the base --lr. The LUT grids and the CNN '
+                            'weight-predictor have very different gradient scales, so '
+                            'Zeng et al. train the LUTs faster than the predictor. '
+                            '1.0 = single shared LR (only used when model=3d_lut, '
+                            'default: 10.0)')
 
     # Early stopping
     parser.add_argument('--early-stopping', type=int, default=15,
@@ -618,12 +654,19 @@ def main():
     # Disable pin_memory for MPS (not supported yet)
     use_pin_memory = device.type == 'cuda'
 
+    # persistent_workers/prefetch_factor are only valid with worker processes
+    # (num_workers > 0); they error if passed when loading on the main process.
+    worker_kwargs = {}
+    if args.num_workers > 0:
+        worker_kwargs = {'persistent_workers': True, 'prefetch_factor': 4}
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=use_pin_memory
+        pin_memory=use_pin_memory,
+        **worker_kwargs
     )
 
     val_loader = DataLoader(
@@ -631,7 +674,8 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=use_pin_memory
+        pin_memory=use_pin_memory,
+        **worker_kwargs
     )
 
     # Test memory with one batch
@@ -689,6 +733,12 @@ def main():
         logger.info(f"Using SS-UIE model (H={model_img_size}, W={model_img_size})")
         if use_gradient_checkpointing:
             logger.warning("Gradient checkpointing requested but not yet implemented for SS-UIE model")
+    elif args.model == '3d_lut':
+        # Image-adaptive 3D LUT: resolution-independent, texture-preserving.
+        model = LUT3D(n_channels=3, n_luts=args.lut_num, lut_dim=args.lut_dim).to(device)
+        logger.info(f"Using image-adaptive 3D LUT model (lut_dim={args.lut_dim}, n_luts={args.lut_num})")
+        if use_gradient_checkpointing:
+            logger.warning("Gradient checkpointing requested but not supported for 3D LUT model")
     else:
         model = UNetAutoencoder(n_channels=3, n_classes=3).to(device)
         logger.info("Using U-Net Autoencoder model")
@@ -699,13 +749,29 @@ def main():
     logger.info(f"Model parameters: {total_params:,}")
     logger.info(f"Model size: {total_params * 4 / 1e6:.2f} MB (FP32)")
 
-    # Loss and optimizer - SS-UIE uses paper-specific multi-component loss
+    # Loss and optimizer.
+    # 'auto' resolves to a per-model default; an explicit --loss overrides it.
     is_ss_uie = args.model == 'ss_uie'
-    if is_ss_uie:
+    loss_choice = args.loss
+    if loss_choice == 'auto':
+        if args.model == 'ss_uie':
+            loss_choice = 'ss_uie'
+        elif args.model == '3d_lut':
+            loss_choice = 'composite'
+        else:
+            loss_choice = 'combined'
+
+    if loss_choice == 'ss_uie':
         criterion = SSUIECombinedLoss()
         logger.info("Using SS-UIE paper loss: SSIM*10 + L1*10 + LCH + LAB*0.0001 + FDL*10000")
+    elif loss_choice == 'composite':
+        w_l1, w_mssim, w_ffl, w_lpips = args.composite_weights
+        criterion = CompositeLoss(w_l1=w_l1, w_mssim=w_mssim, w_ffl=w_ffl, w_lpips=w_lpips).to(device)
+        logger.info(f"Using composite texture loss: L1*{w_l1} + (1-MS-SSIM)*{w_mssim} "
+                    f"+ FFL*{w_ffl} + LPIPS*{w_lpips}")
     else:
         criterion = CombinedLoss(alpha=args.l1_weight, beta=args.mse_weight)
+        logger.info(f"Using combined loss: L1*{args.l1_weight} + MSE*{args.mse_weight}")
 
     # Select optimizer - SS-UIE uses different betas per paper
     use_8bit_optimizer = args.optimizer_8bit
@@ -713,17 +779,35 @@ def main():
     # SS-UIE paper uses beta1=0.5 for faster adaptation (common in image restoration)
     adam_betas = (0.5, 0.999) if is_ss_uie else (0.9, 0.999)
 
+    # Parameter groups. For the 3D LUT, the basis-LUT grids and the CNN weight-
+    # predictor have very different gradient scales, so Zeng et al. train the LUT
+    # entries at a higher learning rate than the predictor. A multiplier of 1.0
+    # collapses back to a single shared LR. Built on the raw module (before any
+    # torch.compile wrapping below), so the parameter name is exactly 'luts'.
+    if args.model == '3d_lut' and args.lut_lr_mult != 1.0:
+        lut_params, other_params = [], []
+        for name, p in model.named_parameters():
+            (lut_params if name == 'luts' else other_params).append(p)
+        optim_params = [
+            {'params': other_params, 'lr': args.lr},
+            {'params': lut_params, 'lr': args.lr * args.lut_lr_mult},
+        ]
+        logger.info(f"3D LUT learning rates: predictor={args.lr:g}, "
+                    f"LUT entries={args.lr * args.lut_lr_mult:g} (x{args.lut_lr_mult:g})")
+    else:
+        optim_params = model.parameters()
+
     if use_8bit_optimizer:
         if HAS_BITSANDBYTES:
-            optimizer = bnb.optim.Adam8bit(model.parameters(), lr=args.lr, betas=adam_betas)
+            optimizer = bnb.optim.Adam8bit(optim_params, lr=args.lr, betas=adam_betas)
             logger.info(f"Using 8-bit Adam optimizer (bitsandbytes) with betas={adam_betas}")
         else:
             logger.warning("8-bit optimizer requested but bitsandbytes not installed. Falling back to standard Adam.")
             logger.warning("Install with: pip install bitsandbytes")
-            optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=adam_betas)
+            optimizer = optim.Adam(optim_params, lr=args.lr, betas=adam_betas)
             use_8bit_optimizer = False
     else:
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=adam_betas)
+        optimizer = optim.Adam(optim_params, lr=args.lr, betas=adam_betas)
         if is_ss_uie:
             logger.info(f"Using SS-UIE paper optimizer settings: Adam with betas={adam_betas}")
 
@@ -878,6 +962,10 @@ def main():
             if args.model == 'ss_uie':
                 checkpoint['model_config']['ss_uie_H'] = model_img_size
                 checkpoint['model_config']['ss_uie_W'] = model_img_size
+            # Add 3D LUT specific params if applicable
+            if args.model == '3d_lut':
+                checkpoint['model_config']['lut_dim'] = args.lut_dim
+                checkpoint['model_config']['lut_num'] = args.lut_num
 
             torch.save(checkpoint, best_model_path)
             logger.info(f"✓ Saved best model: {best_model_path}")
@@ -907,6 +995,10 @@ def main():
     if args.model == 'ss_uie':
         final_model_config['ss_uie_H'] = model_img_size
         final_model_config['ss_uie_W'] = model_img_size
+    # Add 3D LUT specific params if applicable
+    if args.model == '3d_lut':
+        final_model_config['lut_dim'] = args.lut_dim
+        final_model_config['lut_num'] = args.lut_num
     final_checkpoint = {
         'model_state_dict': model.state_dict(),
         'model_config': final_model_config,

@@ -43,3 +43,7 @@ customtkinter>=5.2.2
 # Optional: SS-UIE model dependencies (requires CUDA)
 # Install manually if using SS-UIE model:
 # pip install mamba-ssm causal-conv1d timm einops
+
+# Optional: LPIPS perceptual term for the composite loss (off by default).
+# Only needed when training with a nonzero LPIPS weight (--composite-weights):
+# pip install lpips

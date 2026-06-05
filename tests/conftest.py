@@ -42,6 +42,21 @@ def test_image_dir(tmp_path_factory, test_image_path):
     return str(Path(test_image_path).parent)
 
 
+@pytest.fixture(scope="session")
+def large_test_image_path(tmp_path_factory):
+    """Create a large, non-square test image that exceeds the 2048px tiling
+    threshold on both axes. Used to verify resolution-independent models (3D LUT)
+    process the whole frame in one pass instead of tiling."""
+    tmp_dir = tmp_path_factory.mktemp("large_test_images")
+    image_path = tmp_dir / "large_test_input.jpg"
+
+    # Non-square and > 2048 on both axes (so width != height catches axis swaps).
+    img_array = np.random.randint(0, 255, (2100, 2400, 3), dtype=np.uint8)
+    Image.fromarray(img_array).save(image_path)
+
+    return str(image_path)
+
+
 def create_unet_checkpoint(path: Path, base_features: int = TEST_UNET_BASE_FEATURES):
     """Create a minimal UNet checkpoint for testing
 
@@ -123,12 +138,48 @@ def create_ushape_checkpoint(path: Path, img_dim: int = TEST_USHAPE_IMG_DIM, leg
     return path
 
 
+def create_lut3d_checkpoint(path: Path, lut_dim: int = 9, lut_num: int = 3):
+    """Create a minimal 3D LUT checkpoint for testing.
+
+    Uses a small lut_dim for speed; the model is resolution-independent so the
+    LUT grid size is unrelated to the test image size.
+    """
+    from src.models.lut_3d import LUT3D
+
+    model = LUT3D(n_channels=3, n_luts=lut_num, lut_dim=lut_dim)
+
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'epoch': 1,
+        'val_loss': 0.1,
+        'model_config': {
+            'n_channels': 3,
+            'n_classes': 3,
+            'image_size': TEST_IMAGE_SIZE,
+            'model': '3d_lut',
+            'lut_dim': lut_dim,
+            'lut_num': lut_num,
+        }
+    }
+
+    torch.save(checkpoint, path)
+    return path
+
+
 @pytest.fixture(scope="session")
 def unet_checkpoint_path(tmp_path_factory):
     """Create a UNet checkpoint for testing"""
     tmp_dir = tmp_path_factory.mktemp("checkpoints")
     checkpoint_path = tmp_dir / "unet_test.pth"
     return create_unet_checkpoint(checkpoint_path)
+
+
+@pytest.fixture(scope="session")
+def lut3d_checkpoint_path(tmp_path_factory):
+    """Create a 3D LUT checkpoint for testing"""
+    tmp_dir = tmp_path_factory.mktemp("checkpoints")
+    checkpoint_path = tmp_dir / "lut3d_test.pth"
+    return create_lut3d_checkpoint(checkpoint_path)
 
 
 @pytest.fixture(scope="session")

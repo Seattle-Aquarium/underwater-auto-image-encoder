@@ -218,6 +218,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=None,
+        help='DataLoader workers for parallel image decoding'
+    )
+
+    parser.add_argument(
         '--lr',
         type=float,
         default=None,
@@ -249,8 +256,39 @@ Examples:
         '--model',
         type=str,
         default=None,
-        choices=['unet', 'ushape_transformer', 'ss_uie'],
-        help='Model architecture: unet, ushape_transformer, or ss_uie'
+        choices=['unet', 'ushape_transformer', 'ss_uie', '3d_lut'],
+        help='Model architecture: unet, ushape_transformer, ss_uie, or 3d_lut'
+    )
+
+    parser.add_argument(
+        '--loss',
+        type=str,
+        default=None,
+        choices=['auto', 'combined', 'composite', 'ss_uie'],
+        help="Loss function (default: auto, picks per model). 'composite' = "
+             "L1 + MS-SSIM + Focal Frequency (+ optional LPIPS) for texture preservation."
+    )
+
+    parser.add_argument(
+        '--lut-dim',
+        type=int,
+        default=None,
+        help='3D LUT grid resolution per axis (default: 33, only used for --model 3d_lut)'
+    )
+
+    parser.add_argument(
+        '--lut-num',
+        type=int,
+        default=None,
+        help='Number of basis 3D LUTs to fuse (default: 3, only used for --model 3d_lut)'
+    )
+
+    parser.add_argument(
+        '--lut-lr-mult',
+        type=float,
+        default=None,
+        help='LR multiplier for 3D LUT basis entries vs base LR '
+             '(default: 10.0, only used for --model 3d_lut)'
     )
 
     parser.add_argument(
@@ -366,11 +404,16 @@ Examples:
     image_size = args.image_size or training_config.get('image_size', 1024)
     batch_size = args.batch_size or training_config.get('batch_size', 8)
     epochs = args.epochs or training_config.get('epochs', 50)
+    num_workers = args.num_workers if args.num_workers is not None else training_config.get('num_workers', 4)
     lr = args.lr or training_config.get('learning_rate', 1e-4)
     output_dir = args.output_dir or training_config.get('output_dir', 'output')
     checkpoint_dir = args.checkpoint_dir or training_config.get('checkpoint_dir', 'checkpoints')
     resume = args.resume or training_config.get('resume')
     model = args.model or training_config.get('model', 'unet')
+    loss = args.loss or training_config.get('loss', 'auto')
+    lut_dim = args.lut_dim or training_config.get('lut_dim', 33)
+    lut_num = args.lut_num or training_config.get('lut_num', 3)
+    lut_lr_mult = args.lut_lr_mult if args.lut_lr_mult is not None else training_config.get('lut_lr_mult', 10.0)
     # Handle amp: CLI flag takes precedence (when True), then config, default False
     use_amp = args.amp or training_config.get('amp', False)
     # Handle gradient_checkpointing: CLI flag takes precedence (when True), then config, default False
@@ -547,11 +590,19 @@ Examples:
         '--image-size', str(image_size),
         '--batch-size', str(batch_size),
         '--epochs', str(epochs),
+        '--num-workers', str(num_workers),
         '--lr', str(lr),
         '--output-dir', output_dir,
         '--checkpoint-dir', checkpoint_dir,
         '--model', model
     ]
+
+    if loss and loss != 'auto':
+        cmd.extend(['--loss', loss])
+
+    if model == '3d_lut':
+        cmd.extend(['--lut-dim', str(lut_dim), '--lut-num', str(lut_num),
+                    '--lut-lr-mult', str(lut_lr_mult)])
 
     if resume:
         cmd.extend(['--resume', resume])
