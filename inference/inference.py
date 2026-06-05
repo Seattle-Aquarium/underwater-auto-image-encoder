@@ -588,6 +588,28 @@ class Inferencer:
         model_type = self.config['model']['type']
         resize_inference = self.config.get('inference', {}).get('resize_inference', False)
 
+        # 3D LUT: a single global, per-pixel colour transform that is resolution-
+        # independent. Always process the whole image in ONE forward pass -- never
+        # tile and never resize. Tiling would run the weight-predictor on each tile
+        # separately, applying a *different* LUT to each region (colour seams); and
+        # resizing would apply the LUT at low resolution then upscale, blurring away
+        # the fine texture this model exists to preserve. No padding is needed:
+        # grid_sample handles any H x W and the predictor resizes to 256 internally.
+        if model_type == 'LUT3D':
+            logger.info(f"Processing {width}x{height} image whole at native resolution (3D LUT)")
+            if progress_callback:
+                progress_callback(f"Processing {width}x{height} image at native resolution")
+            input_tensor = self.transform(img).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                output_tensor = self.model(input_tensor)
+            output_img = self.inverse_transform(output_tensor.squeeze(0).cpu())
+
+            if output_path:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_img.save(output_path, quality=95)
+                logger.info(f"Saved enhanced image to {output_path}")
+            return output_img
+
         # Determine tile size threshold based on model type
         if model_type == 'UShapeTransformer':
             # For U-Shape Transformer, always use tiling to maintain max resolution

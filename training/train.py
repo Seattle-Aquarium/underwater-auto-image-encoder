@@ -647,12 +647,19 @@ def main():
     # Disable pin_memory for MPS (not supported yet)
     use_pin_memory = device.type == 'cuda'
 
+    # persistent_workers/prefetch_factor are only valid with worker processes
+    # (num_workers > 0); they error if passed when loading on the main process.
+    worker_kwargs = {}
+    if args.num_workers > 0:
+        worker_kwargs = {'persistent_workers': True, 'prefetch_factor': 4}
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=use_pin_memory
+        pin_memory=use_pin_memory,
+        **worker_kwargs
     )
 
     val_loader = DataLoader(
@@ -660,7 +667,8 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=use_pin_memory
+        pin_memory=use_pin_memory,
+        **worker_kwargs
     )
 
     # Test memory with one batch

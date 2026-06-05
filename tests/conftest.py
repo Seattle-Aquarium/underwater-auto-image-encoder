@@ -42,6 +42,21 @@ def test_image_dir(tmp_path_factory, test_image_path):
     return str(Path(test_image_path).parent)
 
 
+@pytest.fixture(scope="session")
+def large_test_image_path(tmp_path_factory):
+    """Create a large, non-square test image that exceeds the 2048px tiling
+    threshold on both axes. Used to verify resolution-independent models (3D LUT)
+    process the whole frame in one pass instead of tiling."""
+    tmp_dir = tmp_path_factory.mktemp("large_test_images")
+    image_path = tmp_dir / "large_test_input.jpg"
+
+    # Non-square and > 2048 on both axes (so width != height catches axis swaps).
+    img_array = np.random.randint(0, 255, (2100, 2400, 3), dtype=np.uint8)
+    Image.fromarray(img_array).save(image_path)
+
+    return str(image_path)
+
+
 def create_unet_checkpoint(path: Path, base_features: int = TEST_UNET_BASE_FEATURES):
     """Create a minimal UNet checkpoint for testing
 

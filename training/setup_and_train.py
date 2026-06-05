@@ -218,6 +218,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=None,
+        help='DataLoader workers for parallel image decoding'
+    )
+
+    parser.add_argument(
         '--lr',
         type=float,
         default=None,
@@ -389,6 +396,7 @@ Examples:
     image_size = args.image_size or training_config.get('image_size', 1024)
     batch_size = args.batch_size or training_config.get('batch_size', 8)
     epochs = args.epochs or training_config.get('epochs', 50)
+    num_workers = args.num_workers if args.num_workers is not None else training_config.get('num_workers', 4)
     lr = args.lr or training_config.get('learning_rate', 1e-4)
     output_dir = args.output_dir or training_config.get('output_dir', 'output')
     checkpoint_dir = args.checkpoint_dir or training_config.get('checkpoint_dir', 'checkpoints')
@@ -573,6 +581,7 @@ Examples:
         '--image-size', str(image_size),
         '--batch-size', str(batch_size),
         '--epochs', str(epochs),
+        '--num-workers', str(num_workers),
         '--lr', str(lr),
         '--output-dir', output_dir,
         '--checkpoint-dir', checkpoint_dir,

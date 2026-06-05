@@ -6,6 +6,7 @@ for all model types and checkpoint formats.
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import torch
 from PIL import Image
@@ -73,6 +74,27 @@ class TestLUT3DInference:
         original = Image.open(test_image_path)
         inferencer = Inferencer(str(lut3d_checkpoint_path))
         result = inferencer.process_image(test_image_path)
+        assert result.size == original.size
+
+    def test_lut3d_large_image_processed_whole_not_tiled(
+        self, lut3d_checkpoint_path, large_test_image_path):
+        """A large (>2048px) image must be processed in one pass, not tiled.
+
+        Tiling would run the weight-predictor per tile and apply a different LUT to
+        each region, breaking the model's single global colour transform. Guard
+        against a regression that routes 3D LUT through process_image_tiled.
+        """
+        original = Image.open(large_test_image_path)
+        assert max(original.size) > 2048  # fixture must exercise the tiling threshold
+
+        inferencer = Inferencer(str(lut3d_checkpoint_path))
+        with mock.patch.object(
+                inferencer, 'process_image_tiled',
+                side_effect=AssertionError('3D LUT must not be tiled')) as tiled:
+            result = inferencer.process_image(large_test_image_path)
+
+        tiled.assert_not_called()
+        # Native resolution preserved exactly (and no width/height axis swap).
         assert result.size == original.size
 
 
