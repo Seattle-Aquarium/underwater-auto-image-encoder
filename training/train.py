@@ -548,6 +548,13 @@ def main():
                        help='3D LUT grid resolution per axis (default: 33)')
     parser.add_argument('--lut-num', type=int, default=3,
                        help='Number of basis 3D LUTs to fuse (default: 3)')
+    parser.add_argument('--lut-lr-mult', type=float, default=10.0,
+                       help='Learning-rate multiplier for the 3D LUT basis entries '
+                            'relative to the base --lr. The LUT grids and the CNN '
+                            'weight-predictor have very different gradient scales, so '
+                            'Zeng et al. train the LUTs faster than the predictor. '
+                            '1.0 = single shared LR (only used when model=3d_lut, '
+                            'default: 10.0)')
 
     # Early stopping
     parser.add_argument('--early-stopping', type=int, default=15,
@@ -772,17 +779,35 @@ def main():
     # SS-UIE paper uses beta1=0.5 for faster adaptation (common in image restoration)
     adam_betas = (0.5, 0.999) if is_ss_uie else (0.9, 0.999)
 
+    # Parameter groups. For the 3D LUT, the basis-LUT grids and the CNN weight-
+    # predictor have very different gradient scales, so Zeng et al. train the LUT
+    # entries at a higher learning rate than the predictor. A multiplier of 1.0
+    # collapses back to a single shared LR. Built on the raw module (before any
+    # torch.compile wrapping below), so the parameter name is exactly 'luts'.
+    if args.model == '3d_lut' and args.lut_lr_mult != 1.0:
+        lut_params, other_params = [], []
+        for name, p in model.named_parameters():
+            (lut_params if name == 'luts' else other_params).append(p)
+        optim_params = [
+            {'params': other_params, 'lr': args.lr},
+            {'params': lut_params, 'lr': args.lr * args.lut_lr_mult},
+        ]
+        logger.info(f"3D LUT learning rates: predictor={args.lr:g}, "
+                    f"LUT entries={args.lr * args.lut_lr_mult:g} (x{args.lut_lr_mult:g})")
+    else:
+        optim_params = model.parameters()
+
     if use_8bit_optimizer:
         if HAS_BITSANDBYTES:
-            optimizer = bnb.optim.Adam8bit(model.parameters(), lr=args.lr, betas=adam_betas)
+            optimizer = bnb.optim.Adam8bit(optim_params, lr=args.lr, betas=adam_betas)
             logger.info(f"Using 8-bit Adam optimizer (bitsandbytes) with betas={adam_betas}")
         else:
             logger.warning("8-bit optimizer requested but bitsandbytes not installed. Falling back to standard Adam.")
             logger.warning("Install with: pip install bitsandbytes")
-            optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=adam_betas)
+            optimizer = optim.Adam(optim_params, lr=args.lr, betas=adam_betas)
             use_8bit_optimizer = False
     else:
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=adam_betas)
+        optimizer = optim.Adam(optim_params, lr=args.lr, betas=adam_betas)
         if is_ss_uie:
             logger.info(f"Using SS-UIE paper optimizer settings: Adam with betas={adam_betas}")
 

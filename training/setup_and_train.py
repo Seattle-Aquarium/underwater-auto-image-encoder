@@ -284,6 +284,14 @@ Examples:
     )
 
     parser.add_argument(
+        '--lut-lr-mult',
+        type=float,
+        default=None,
+        help='LR multiplier for 3D LUT basis entries vs base LR '
+             '(default: 10.0, only used for --model 3d_lut)'
+    )
+
+    parser.add_argument(
         '--amp',
         action='store_true',
         help='Enable automatic mixed precision (FP16) training for reduced memory usage'
@@ -405,6 +413,7 @@ Examples:
     loss = args.loss or training_config.get('loss', 'auto')
     lut_dim = args.lut_dim or training_config.get('lut_dim', 33)
     lut_num = args.lut_num or training_config.get('lut_num', 3)
+    lut_lr_mult = args.lut_lr_mult if args.lut_lr_mult is not None else training_config.get('lut_lr_mult', 10.0)
     # Handle amp: CLI flag takes precedence (when True), then config, default False
     use_amp = args.amp or training_config.get('amp', False)
     # Handle gradient_checkpointing: CLI flag takes precedence (when True), then config, default False
@@ -592,7 +601,8 @@ Examples:
         cmd.extend(['--loss', loss])
 
     if model == '3d_lut':
-        cmd.extend(['--lut-dim', str(lut_dim), '--lut-num', str(lut_num)])
+        cmd.extend(['--lut-dim', str(lut_dim), '--lut-num', str(lut_num),
+                    '--lut-lr-mult', str(lut_lr_mult)])
 
     if resume:
         cmd.extend(['--resume', resume])

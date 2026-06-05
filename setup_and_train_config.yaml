@@ -52,6 +52,10 @@ training:
                 # combined otherwise.
   lut_dim: 33  # 3D LUT grid resolution per axis (only used when model: 3d_lut)
   lut_num: 3   # Number of basis 3D LUTs to fuse (only used when model: 3d_lut)
+  lut_lr_mult: 10.0  # LR multiplier for the LUT basis entries vs base learning_rate
+                     # (only used when model: 3d_lut). The LUT grids and the CNN
+                     # weight-predictor have different gradient scales, so the LUTs
+                     # train faster (Zeng et al.). Set to 1.0 for a single shared LR.
   amp: false  # Enable automatic mixed precision (FP16) training
               # Reduces memory usage by ~40-50%, recommended for large models/images
   gradient_checkpointing: false  # Enable gradient checkpointing for memory-efficient training
