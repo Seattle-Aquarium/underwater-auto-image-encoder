@@ -4,7 +4,7 @@ Underwater Image Enhancer GUI Application
 Main entry point for the desktop application
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.1"
 
 import sys
 import os
