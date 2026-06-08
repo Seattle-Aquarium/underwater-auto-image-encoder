@@ -381,6 +381,7 @@ class UnderwaterEnhancerApp(ctk.CTk):
         # Disable controls
         self.processing = True
         self.cancel_processing = False
+        self.process_start_time = datetime.now()
         self.set_controls_enabled(False)
         self.cancel_btn.configure(state="normal")
         
@@ -494,16 +495,12 @@ class UnderwaterEnhancerApp(ctk.CTk):
         progress = current / total if total > 0 else 0
         
         # Calculate time estimates
-        if hasattr(self, 'process_start_time'):
-            if current > 0:
-                elapsed = datetime.now() - self.process_start_time
-                per_image = elapsed / current
-                remaining = per_image * (total - current)
-                time_text = f"Time Elapsed: {str(elapsed).split('.')[0]} | Est. Remaining: {str(remaining).split('.')[0]}"
-            else:
-                time_text = ""
+        if current > 0:
+            elapsed = datetime.now() - self.process_start_time
+            per_image = elapsed / current
+            remaining = per_image * (total - current)
+            time_text = f"Time Elapsed: {str(elapsed).split('.')[0]} | Est. Remaining: {str(remaining).split('.')[0]}"
         else:
-            self.process_start_time = datetime.now()
             time_text = ""
         
         # Update UI in main thread
