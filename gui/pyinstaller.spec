@@ -189,17 +189,21 @@ a = Analysis(
 # Prune CUDA DLLs that a GPU *inference* app never loads (Windows cu121 build).
 # This keeps full CUDA support while cutting the bundle size below the 2GB
 # GitHub release-asset limit. Sizes below are approximate for torch cu121.
-#   - cudnn *_train* DLLs: training-only, unused by inference (~300-500MB)
-#   - cusolver / cusparse: not used by plain CNN inference (~250MB)
-# NOTE: CI runners have no GPU, so the smoke test will NOT catch a bad prune.
-#       Verify a pruned build on a real CUDA machine before releasing.
+#   - cudnn *_train* DLLs: training-only sublibraries, loaded lazily by
+#     cudnn64_8.dll at runtime (never at import), so safe to drop (~300-500MB)
+#
+# CAUTION: torch import-loads *every* DLL in torch/lib on Windows, and
+# torch_cuda.dll has load-time deps on cublas/cudnn(core)/cufft/curand/
+# cusolver/cusparse. Dropping any of those breaks `import torch` outright
+# (WinError 126 at startup) — only lazily-loaded leaf DLLs are safe to prune.
+#
+# NOTE: CI runners have no GPU, so the smoke test will NOT catch a runtime
+#       (GPU-only) breakage. Verify a pruned build on a real CUDA machine.
 if system == 'windows':
     cuda_drop_tokens = (
         'cudnn_ops_train',
         'cudnn_cnn_train',
         'cudnn_adv_train',
-        'cusolver',
-        'cusparse',
     )
     kept = []
     dropped_bytes = 0
