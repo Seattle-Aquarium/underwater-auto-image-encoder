@@ -100,19 +100,19 @@ class ImageProcessor:
                         pass
             
             # Convert output format if needed
-            if output_format.upper() == 'JPEG' and output_path.suffix.lower() != '.jpg':
+            if output_format.upper() == 'JPEG' and output_path.suffix.lower() not in ['.jpg', '.jpeg']:
                 from PIL import Image
-                img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
                 save_kw = dict(jpeg_options or {'quality': 95})
-                exif = self.inferencer._extract_exif(img)
-                if exif:
-                    save_kw['exif'] = exif
-                img.save(jpeg_path, 'JPEG', **save_kw)
+                with Image.open(output_path) as img:
+                    exif = self.inferencer._extract_exif(img)
+                    if exif:
+                        save_kw['exif'] = exif
+                    img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
-            
+
             return output_path
         else:
             # Direct processing for TIFF/JPEG - using inferencer exactly like inference.py
@@ -120,15 +120,15 @@ class ImageProcessor:
             output_img = self.inferencer.process_image(input_path, output_path, progress_callback=progress_callback, save_options=jpeg_options)
 
             # Convert output format if needed
-            if output_format.upper() == 'JPEG' and not output_path.suffix.lower() in ['.jpg', '.jpeg']:
+            if output_format.upper() == 'JPEG' and output_path.suffix.lower() not in ['.jpg', '.jpeg']:
                 from PIL import Image
-                img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
                 save_kw = dict(jpeg_options or {'quality': 95})
-                exif = self.inferencer._extract_exif(img)
-                if exif:
-                    save_kw['exif'] = exif
-                img.save(jpeg_path, 'JPEG', **save_kw)
+                with Image.open(output_path) as img:
+                    exif = self.inferencer._extract_exif(img)
+                    if exif:
+                        save_kw['exif'] = exif
+                    img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
