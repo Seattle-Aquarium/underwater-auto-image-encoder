@@ -33,6 +33,39 @@ logger = logging.getLogger(__name__)
 ctk.set_appearance_mode("system")  # Modes: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # Themes: "blue", "green", "dark-blue"
 
+
+class ToolTip:
+    """Simple hover tooltip for a CustomTkinter/Tkinter widget."""
+
+    def __init__(self, widget, text: str, wraplength: int = 260):
+        self.widget = widget
+        self.text = text
+        self.wraplength = wraplength
+        self.tip_window = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event=None):
+        if self.tip_window or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip_window = tw = ctk.CTkToplevel(self.widget)
+        tw.wm_overrideredirect(True)  # no title bar / borders
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
+        label = ctk.CTkLabel(
+            tw, text=self.text, wraplength=self.wraplength,
+            justify="left", fg_color=("gray90", "gray20"), corner_radius=6,
+        )
+        label.pack(padx=8, pady=6)
+
+    def _hide(self, _event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 class UnderwaterEnhancerApp(ctk.CTk):
     """Main application window"""
     
@@ -206,10 +239,18 @@ class UnderwaterEnhancerApp(ctk.CTk):
         self.jpeg_optimize_var = ctk.BooleanVar(value=False)
         self.jpeg_optimize_check = ctk.CTkCheckBox(jpeg_frame, text="Optimize", variable=self.jpeg_optimize_var)
         self.jpeg_optimize_check.pack(side="left", padx=5)
+        ToolTip(self.jpeg_optimize_check,
+                "Runs an extra encoding pass to compute optimal Huffman tables. "
+                "Produces a smaller file with no additional quality loss; "
+                "encoding is slightly slower.")
 
         self.jpeg_progressive_var = ctk.BooleanVar(value=False)
         self.jpeg_progressive_check = ctk.CTkCheckBox(jpeg_frame, text="Progressive", variable=self.jpeg_progressive_var)
         self.jpeg_progressive_check.pack(side="left", padx=5)
+        ToolTip(self.jpeg_progressive_check,
+                "Saves a progressive JPEG that loads in successive full-image passes "
+                "(blurry to sharp) instead of top-to-bottom. Better for web previews "
+                "and often marginally smaller.")
 
         # Set initial enabled state of JPEG controls based on default format (TIFF)
         self.on_format_change()
