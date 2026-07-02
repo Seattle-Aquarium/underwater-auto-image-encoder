@@ -572,13 +572,28 @@ class Inferencer:
 
         return output_img
 
-    def process_image(self, image_path: Path, output_path: Path = None, progress_callback=None):
+    def _save_image(self, image, output_path: Path, save_options=None):
+        """Save an output image.
+
+        For JPEG outputs, ``save_options`` (a dict of PIL JPEG params such as
+        ``quality``, ``subsampling``, ``optimize``, ``progressive``) is applied;
+        when not provided it falls back to ``quality=95`` to preserve prior
+        behavior. JPEG options are ignored for non-JPEG formats.
+        """
+        if str(output_path).lower().endswith(('.jpg', '.jpeg')):
+            save_kwargs = save_options if save_options else {'quality': 95}
+            image.save(output_path, **save_kwargs)
+        else:
+            image.save(output_path)
+
+    def process_image(self, image_path: Path, output_path: Path = None, progress_callback=None, save_options=None):
         """Process a single image
 
         Args:
             image_path: Path to input image
             output_path: Optional output path for saving
             progress_callback: Optional callback(message) for progress updates
+            save_options: Optional dict of PIL JPEG save params (applied to JPEG output)
         """
         img = Image.open(image_path).convert('RGB')
         original_size = img.size
@@ -606,7 +621,7 @@ class Inferencer:
 
             if output_path:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_img.save(output_path, quality=95)
+                self._save_image(output_img, output_path, save_options)
                 logger.info(f"Saved enhanced image to {output_path}")
             return output_img
 
@@ -658,9 +673,9 @@ class Inferencer:
         
         if output_path:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_img.save(output_path, quality=95)
+            self._save_image(output_img, output_path, save_options)
             logger.info(f"Saved enhanced image to {output_path}")
-        
+
         return output_img
     
     def process_directory(self, input_dir: Path, output_dir: Path, 

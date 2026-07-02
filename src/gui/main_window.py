@@ -172,12 +172,48 @@ class UnderwaterEnhancerApp(ctk.CTk):
         ctk.CTkLabel(info_frame, text="Output Format:").pack(side="left", padx=(50, 10))
         
         self.format_var = ctk.StringVar(value="TIFF")
-        self.tiff_radio = ctk.CTkRadioButton(info_frame, text="TIFF", variable=self.format_var, value="TIFF")
+        self.tiff_radio = ctk.CTkRadioButton(info_frame, text="TIFF", variable=self.format_var,
+                                             value="TIFF", command=self.on_format_change)
         self.tiff_radio.pack(side="left", padx=5)
-        
-        self.jpeg_radio = ctk.CTkRadioButton(info_frame, text="JPEG", variable=self.format_var, value="JPEG")
+
+        self.jpeg_radio = ctk.CTkRadioButton(info_frame, text="JPEG", variable=self.format_var,
+                                             value="JPEG", command=self.on_format_change)
         self.jpeg_radio.pack(side="left", padx=5)
-        
+
+        # JPEG export options (enabled only when JPEG format is selected)
+        jpeg_frame = ctk.CTkFrame(main_container)
+        jpeg_frame.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkLabel(jpeg_frame, text="JPEG Quality:").pack(side="left", padx=(15, 5))
+        self.jpeg_quality_var = ctk.IntVar(value=95)
+        self.jpeg_quality_slider = ctk.CTkSlider(
+            jpeg_frame, from_=1, to=100, number_of_steps=99,
+            variable=self.jpeg_quality_var, width=180,
+            command=lambda v: self.jpeg_quality_value_label.configure(text=str(int(float(v))))
+        )
+        self.jpeg_quality_slider.pack(side="left", padx=5)
+        self.jpeg_quality_value_label = ctk.CTkLabel(jpeg_frame, text="95", width=30)
+        self.jpeg_quality_value_label.pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(jpeg_frame, text="Subsampling:").pack(side="left", padx=(0, 5))
+        self.jpeg_subsampling_var = ctk.StringVar(value="Auto")
+        self.jpeg_subsampling_menu = ctk.CTkOptionMenu(
+            jpeg_frame, variable=self.jpeg_subsampling_var,
+            values=["Auto", "4:4:4", "4:2:2", "4:2:0"], width=90
+        )
+        self.jpeg_subsampling_menu.pack(side="left", padx=(0, 15))
+
+        self.jpeg_optimize_var = ctk.BooleanVar(value=False)
+        self.jpeg_optimize_check = ctk.CTkCheckBox(jpeg_frame, text="Optimize", variable=self.jpeg_optimize_var)
+        self.jpeg_optimize_check.pack(side="left", padx=5)
+
+        self.jpeg_progressive_var = ctk.BooleanVar(value=False)
+        self.jpeg_progressive_check = ctk.CTkCheckBox(jpeg_frame, text="Progressive", variable=self.jpeg_progressive_var)
+        self.jpeg_progressive_check.pack(side="left", padx=5)
+
+        # Set initial enabled state of JPEG controls based on default format (TIFF)
+        self.on_format_change()
+
         # Progress Frame
         progress_frame = ctk.CTkFrame(main_container)
         progress_frame.pack(fill="x", pady=(0, 8))
@@ -420,7 +456,10 @@ class UnderwaterEnhancerApp(ctk.CTk):
             # Setup paths
             output_dir = Path(self.output_path_var.get())
             output_format = self.format_var.get()
-            
+            jpeg_options = self.get_jpeg_options() if output_format.upper() == "JPEG" else None
+            if jpeg_options:
+                self.log(f"JPEG export options: {jpeg_options}")
+
             # Track timing
             start_time = datetime.now()
             
@@ -448,6 +487,7 @@ class UnderwaterEnhancerApp(ctk.CTk):
                 self.input_files,
                 output_dir,
                 output_format,
+                jpeg_options=jpeg_options,
                 progress_callback=self.update_progress,
                 cancel_check=lambda: self.cancel_processing
             )
@@ -525,6 +565,31 @@ class UnderwaterEnhancerApp(ctk.CTk):
         self.log("Cancelling processing...")
         self.cancel_btn.configure(state="disabled")
     
+    @property
+    def _jpeg_controls(self):
+        """JPEG option widgets, toggled together based on format/processing state"""
+        return (self.jpeg_quality_slider, self.jpeg_subsampling_menu,
+                self.jpeg_optimize_check, self.jpeg_progressive_check)
+
+    def on_format_change(self):
+        """Enable the JPEG option controls only when JPEG output is selected"""
+        state = "normal" if self.format_var.get().upper() == "JPEG" else "disabled"
+        for widget in self._jpeg_controls:
+            widget.configure(state=state)
+
+    def get_jpeg_options(self) -> dict:
+        """Collect PIL JPEG save options from the UI controls"""
+        options = {'quality': int(self.jpeg_quality_var.get())}
+        subsampling_map = {"4:4:4": 0, "4:2:2": 1, "4:2:0": 2}
+        subsampling = self.jpeg_subsampling_var.get()
+        if subsampling in subsampling_map:  # "Auto" omits the param (PIL default)
+            options['subsampling'] = subsampling_map[subsampling]
+        if self.jpeg_optimize_var.get():
+            options['optimize'] = True
+        if self.jpeg_progressive_var.get():
+            options['progressive'] = True
+        return options
+
     def set_controls_enabled(self, enabled: bool):
         """Enable/disable controls during processing"""
         state = "normal" if enabled else "disabled"
@@ -534,6 +599,11 @@ class UnderwaterEnhancerApp(ctk.CTk):
         self.process_btn.configure(state=state)
         self.tiff_radio.configure(state=state)
         self.jpeg_radio.configure(state=state)
+        if enabled:
+            self.on_format_change()  # restore JPEG controls to match selected format
+        else:
+            for widget in self._jpeg_controls:
+                widget.configure(state="disabled")
     
     def log(self, message: str):
         """Add message to log"""
