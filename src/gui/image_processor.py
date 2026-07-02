@@ -57,17 +57,19 @@ class ImageProcessor:
                 device_type = "CPU"
             logger.info(f"Model loaded from {self.model_path} - Using {device_type} - Full resolution processing enabled")
     
-    def process_image(self, input_path: Path, output_path: Path, 
-                     output_format: str = 'TIFF', progress_callback=None) -> Path:
+    def process_image(self, input_path: Path, output_path: Path,
+                     output_format: str = 'TIFF', jpeg_options: Optional[dict] = None,
+                     progress_callback=None) -> Path:
         """
         Process a single image, handling GPR conversion if needed
-        
+
         Args:
             input_path: Path to input image
             output_path: Path for output image
             output_format: Output format ('TIFF' or 'JPEG')
+            jpeg_options: Optional dict of PIL JPEG save params (quality, subsampling, etc.)
             progress_callback: Optional callback for progress updates
-        
+
         Returns:
             Path to processed image
         """
@@ -81,13 +83,14 @@ class ImageProcessor:
                     "GPR file detected but GPR support is not available. "
                     "The gpr_tools binary is missing from the bundled application."
                 )
-            # Convert to TIFF first (let converter create temp file)
-            tiff_path = self.gpr_converter.convert(input_path, output_path=None)
-            
+            # Convert to TIFF first (let converter create temp file).
+            # Salvage EXIF from the DNG since the raw->TIFF step drops metadata.
+            tiff_path, gpr_exif = self.gpr_converter.convert(input_path, output_path=None, return_exif=True)
+
             try:
                 # Process the TIFF using inferencer exactly like inference.py
                 # The inferencer.process_image method will handle tiling for large images
-                output_img = self.inferencer.process_image(tiff_path, output_path, progress_callback=progress_callback)
+                output_img = self.inferencer.process_image(tiff_path, output_path, progress_callback=progress_callback, save_options=jpeg_options, exif=gpr_exif)
             finally:
                 # Clean up temp TIFF
                 if tiff_path and tiff_path.exists():
@@ -97,44 +100,54 @@ class ImageProcessor:
                         pass
             
             # Convert output format if needed
-            if output_format.upper() == 'JPEG' and output_path.suffix.lower() != '.jpg':
+            if output_format.upper() == 'JPEG' and output_path.suffix.lower() not in ['.jpg', '.jpeg']:
                 from PIL import Image
-                img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
-                img.save(jpeg_path, 'JPEG', quality=95)
+                save_kw = dict(jpeg_options or {'quality': 95})
+                with Image.open(output_path) as img:
+                    exif = self.inferencer._extract_exif(img)
+                    if exif:
+                        save_kw['exif'] = exif
+                    img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
-            
+
             return output_path
         else:
             # Direct processing for TIFF/JPEG - using inferencer exactly like inference.py
             # The inferencer.process_image method will handle tiling for large images
-            output_img = self.inferencer.process_image(input_path, output_path, progress_callback=progress_callback)
-            
+            output_img = self.inferencer.process_image(input_path, output_path, progress_callback=progress_callback, save_options=jpeg_options)
+
             # Convert output format if needed
-            if output_format.upper() == 'JPEG' and not output_path.suffix.lower() in ['.jpg', '.jpeg']:
+            if output_format.upper() == 'JPEG' and output_path.suffix.lower() not in ['.jpg', '.jpeg']:
                 from PIL import Image
-                img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
-                img.save(jpeg_path, 'JPEG', quality=95)
+                save_kw = dict(jpeg_options or {'quality': 95})
+                with Image.open(output_path) as img:
+                    exif = self.inferencer._extract_exif(img)
+                    if exif:
+                        save_kw['exif'] = exif
+                    img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
             
             return output_path
     
-    def process_batch(self, input_files: list[Path], output_dir: Path, 
+    def process_batch(self, input_files: list[Path], output_dir: Path,
                      output_format: str = 'TIFF',
+                     jpeg_options: Optional[dict] = None,
                      progress_callback: Optional[Callable] = None,
                      cancel_check: Optional[Callable] = None) -> list[tuple[Path, Path, bool, str]]:
         """
         Process multiple images in batch
-        
+
         Args:
             input_files: List of input image paths
             output_dir: Directory for output images
             output_format: Output format ('TIFF' or 'JPEG')
+            jpeg_options: Optional dict of PIL JPEG save params (quality, subsampling, etc.)
             progress_callback: Optional callback(current, total, filename, status)
             cancel_check: Optional callback that returns True to cancel
         
@@ -171,7 +184,7 @@ class ImageProcessor:
                         progress_callback(i, len(input_files), input_path.name, f"Processing - {message}")
                 
                 # Process the image with tile progress callback
-                actual_output = self.process_image(input_path, output_path, output_format, progress_callback=tile_progress)
+                actual_output = self.process_image(input_path, output_path, output_format, jpeg_options=jpeg_options, progress_callback=tile_progress)
                 results.append((input_path, actual_output, True, "Success"))
                 
                 if progress_callback:

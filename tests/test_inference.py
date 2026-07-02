@@ -298,3 +298,136 @@ class TestOutputConsistency:
         reloaded = Image.open(output_path)
         assert reloaded.size == result.size
         assert reloaded.mode == 'RGB'
+
+
+class TestJpegSaveOptions:
+    """Tests for JPEG save-option plumbing (quality/subsampling/optimize/progressive)"""
+
+    def _spy_on_save(self, monkeypatch):
+        """Patch PIL's Image.save to record the params of the last save call."""
+        captured = {}
+        original_save = Image.Image.save
+
+        def spy(self, fp, *args, **kwargs):
+            captured.clear()
+            captured.update(kwargs)
+            return original_save(self, fp, *args, **kwargs)
+
+        monkeypatch.setattr(Image.Image, "save", spy)
+        return captured
+
+    def test_save_options_passed_through_to_pil(self, unet_checkpoint_path, test_image_path, tmp_path, monkeypatch):
+        """All JPEG options should reach the underlying PIL save() call"""
+        captured = self._spy_on_save(monkeypatch)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        opts = {"quality": 80, "subsampling": 2, "optimize": True, "progressive": True}
+        inferencer.process_image(test_image_path, tmp_path / "out.jpg", save_options=opts)
+
+        assert captured.get("quality") == 80
+        assert captured.get("subsampling") == 2
+        assert captured.get("optimize") is True
+        assert captured.get("progressive") is True
+
+    def test_default_jpeg_quality_is_95(self, unet_checkpoint_path, test_image_path, tmp_path, monkeypatch):
+        """With no save_options, JPEG output should default to quality=95 (prior behavior)"""
+        captured = self._spy_on_save(monkeypatch)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        inferencer.process_image(test_image_path, tmp_path / "out.jpg")
+
+        assert captured.get("quality") == 95
+
+    def test_jpeg_options_not_applied_to_tiff(self, unet_checkpoint_path, test_image_path, tmp_path, monkeypatch):
+        """JPEG-only params must not be passed when the output is TIFF"""
+        captured = self._spy_on_save(monkeypatch)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        inferencer.process_image(test_image_path, tmp_path / "out.tiff",
+                                 save_options={"quality": 50, "progressive": True})
+
+        assert "quality" not in captured
+        assert "progressive" not in captured
+
+    def test_quality_affects_output_size(self, unet_checkpoint_path, test_image_path, tmp_path):
+        """Lower quality should yield a smaller file than higher quality"""
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        low = tmp_path / "low.jpg"
+        high = tmp_path / "high.jpg"
+        inferencer.process_image(test_image_path, low, save_options={"quality": 15})
+        inferencer.process_image(test_image_path, high, save_options={"quality": 95})
+
+        assert low.stat().st_size < high.stat().st_size
+
+    def test_progressive_flag_encoded(self, unet_checkpoint_path, test_image_path, tmp_path):
+        """The progressive option should produce a progressive JPEG"""
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "prog.jpg"
+        inferencer.process_image(test_image_path, out, save_options={"quality": 90, "progressive": True})
+
+        assert "progression" in Image.open(out).info
+
+
+class TestExifPreservation:
+    """Tests that source EXIF metadata is carried into enhanced outputs"""
+
+    MODEL_TAG = 0x0110  # EXIF 'Model' tag
+
+    def _jpeg_with_exif(self, path, model="GoPro TEST"):
+        exif = Image.Exif()
+        exif[self.MODEL_TAG] = model
+        Image.effect_noise((64, 64), 50).convert("RGB").save(path, exif=exif.tobytes(), quality=95)
+
+    def test_exif_preserved_in_jpeg_output(self, unet_checkpoint_path, tmp_path):
+        src = tmp_path / "src.jpg"
+        self._jpeg_with_exif(src)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.jpg"
+        inferencer.process_image(str(src), out)
+
+        assert Image.open(out).getexif().get(self.MODEL_TAG) == "GoPro TEST"
+
+    def test_exif_preserved_in_tiff_output(self, unet_checkpoint_path, tmp_path):
+        src = tmp_path / "src.jpg"
+        self._jpeg_with_exif(src)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.tiff"
+        inferencer.process_image(str(src), out)
+
+        assert Image.open(out).getexif().get(self.MODEL_TAG) == "GoPro TEST"
+
+    def test_exif_coexists_with_save_options(self, unet_checkpoint_path, tmp_path):
+        src = tmp_path / "src.jpg"
+        self._jpeg_with_exif(src)
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.jpg"
+        inferencer.process_image(str(src), out, save_options={"quality": 80, "progressive": True})
+
+        result = Image.open(out)
+        assert result.getexif().get(self.MODEL_TAG) == "GoPro TEST"
+        assert "progression" in result.info
+
+    def test_explicit_exif_arg_overrides_source(self, unet_checkpoint_path, tmp_path):
+        """An explicit exif= (e.g. salvaged from a GPR's DNG) is used over source EXIF"""
+        src = tmp_path / "src.jpg"
+        self._jpeg_with_exif(src, model="SOURCE")
+        override = Image.Exif()
+        override[self.MODEL_TAG] = "FROM_DNG"
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.jpg"
+        inferencer.process_image(str(src), out, exif=override.tobytes())
+
+        assert Image.open(out).getexif().get(self.MODEL_TAG) == "FROM_DNG"
+
+    def test_source_without_exif_saves_cleanly(self, unet_checkpoint_path, test_image_path, tmp_path):
+        """A source with no EXIF should save without error"""
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.jpg"
+        inferencer.process_image(test_image_path, out)
+
+        assert out.exists()
+
+    def test_malformed_exif_falls_back_to_metadata_free_save(self, unet_checkpoint_path, tmp_path):
+        """A malformed EXIF block should not fail the export"""
+        inferencer = Inferencer(str(unet_checkpoint_path))
+        out = tmp_path / "out.jpg"
+        inferencer._save_image(Image.new("RGB", (16, 16)), out, save_options=None, exif=b"not-valid-exif")
+
+        assert out.exists()

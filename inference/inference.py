@@ -572,15 +572,61 @@ class Inferencer:
 
         return output_img
 
-    def process_image(self, image_path: Path, output_path: Path = None, progress_callback=None):
+    @staticmethod
+    def _extract_exif(image):
+        """Best-effort EXIF bytes from an opened PIL image, or None."""
+        exif = image.info.get('exif')
+        if exif:
+            return exif
+        try:
+            ex = image.getexif()
+            if ex:  # non-empty
+                return ex.tobytes()
+        except Exception:
+            pass
+        return None
+
+    def _save_image(self, image, output_path: Path, save_options=None, exif=None):
+        """Save an output image.
+
+        For JPEG outputs, ``save_options`` (a dict of PIL JPEG params such as
+        ``quality``, ``subsampling``, ``optimize``, ``progressive``) is applied;
+        when not provided it falls back to ``quality=95`` to preserve prior
+        behavior. JPEG options are ignored for non-JPEG formats. When ``exif``
+        bytes are provided they are embedded so source metadata (timestamp, GPS,
+        camera info) survives into the enhanced image; a malformed EXIF block
+        falls back to a metadata-free save rather than failing the export.
+        """
+        if str(output_path).lower().endswith(('.jpg', '.jpeg')):
+            save_kwargs = dict(save_options) if save_options else {'quality': 95}
+        else:
+            save_kwargs = {}
+        if exif:
+            save_kwargs['exif'] = exif
+        try:
+            image.save(output_path, **save_kwargs)
+        except (ValueError, OSError, TypeError) as e:
+            if 'exif' in save_kwargs:
+                logger.warning(f"Could not embed EXIF metadata ({e}); saving without it")
+                save_kwargs.pop('exif')
+                image.save(output_path, **save_kwargs)
+            else:
+                raise
+
+    def process_image(self, image_path: Path, output_path: Path = None, progress_callback=None, save_options=None, exif=None):
         """Process a single image
 
         Args:
             image_path: Path to input image
             output_path: Optional output path for saving
             progress_callback: Optional callback(message) for progress updates
+            save_options: Optional dict of PIL JPEG save params (applied to JPEG output)
+            exif: Optional EXIF bytes to embed; if None, read from the source image
         """
-        img = Image.open(image_path).convert('RGB')
+        source = Image.open(image_path)
+        if exif is None:
+            exif = self._extract_exif(source)
+        img = source.convert('RGB')
         original_size = img.size
         width, height = original_size
 
@@ -606,7 +652,7 @@ class Inferencer:
 
             if output_path:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_img.save(output_path, quality=95)
+                self._save_image(output_img, output_path, save_options, exif)
                 logger.info(f"Saved enhanced image to {output_path}")
             return output_img
 
@@ -658,9 +704,9 @@ class Inferencer:
         
         if output_path:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_img.save(output_path, quality=95)
+            self._save_image(output_img, output_path, save_options, exif)
             logger.info(f"Saved enhanced image to {output_path}")
-        
+
         return output_img
     
     def process_directory(self, input_dir: Path, output_dir: Path, 
