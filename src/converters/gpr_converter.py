@@ -42,20 +42,40 @@ class GPRConverter:
         
         return binary_path
     
+    @staticmethod
+    def _read_dng_exif(dng_path: Path):
+        """Best-effort EXIF bytes from a DNG (TIFF-based), or None.
+
+        The rawpy -> imageio TIFF conversion discards metadata, so this pulls
+        EXIF (timestamp, camera, GPS if present) from the intermediate DNG so it
+        can be re-embedded in the final output.
+        """
+        try:
+            from PIL import Image
+            with Image.open(dng_path) as im:
+                ex = im.getexif()
+                if ex:
+                    return ex.tobytes()
+        except Exception as e:
+            logger.warning(f"Could not read EXIF from DNG: {e}")
+        return None
+
     @classmethod
-    def convert(cls, gpr_path: Path, output_path: Path = None, 
-                keep_temp: bool = False, crop_to_size: tuple = (4606, 4030)) -> Path:
+    def convert(cls, gpr_path: Path, output_path: Path = None,
+                keep_temp: bool = False, crop_to_size: tuple = (4606, 4030),
+                return_exif: bool = False):
         """
         Convert GPR file to TIFF with optional center cropping
-        
+
         Args:
             gpr_path: Path to input GPR file
             output_path: Optional output path (auto-generated if None)
             keep_temp: Keep temporary files for debugging
             crop_to_size: Optional (width, height) tuple for center cropping. Default (4606, 4030) matches training data.
-        
+            return_exif: If True, return (tiff_path, exif_bytes) instead of just tiff_path
+
         Returns:
-            Path to converted TIFF file
+            Path to converted TIFF file, or (path, exif_bytes) when return_exif=True
         """
         try:
             gpr_tools = cls.get_gpr_tools_path()
@@ -84,7 +104,10 @@ class GPRConverter:
             
             if not dng_path.exists():
                 raise RuntimeError(f"Conversion succeeded but DNG file not found: {dng_path}")
-            
+
+            # Salvage EXIF from the DNG before the rawpy->TIFF step drops it
+            dng_exif = cls._read_dng_exif(dng_path) if return_exif else None
+
             # Now convert DNG to TIFF using rawpy or PIL
             try:
                 import rawpy
@@ -167,9 +190,11 @@ class GPRConverter:
                         dng_path.rename(output_path)
                     else:
                         output_path = dng_path
-            
+
+            if return_exif:
+                return output_path, dng_exif
             return output_path
-            
+
         except subprocess.TimeoutExpired:
             logger.error(f"GPR conversion timed out for {gpr_path}")
             raise

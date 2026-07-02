@@ -83,13 +83,14 @@ class ImageProcessor:
                     "GPR file detected but GPR support is not available. "
                     "The gpr_tools binary is missing from the bundled application."
                 )
-            # Convert to TIFF first (let converter create temp file)
-            tiff_path = self.gpr_converter.convert(input_path, output_path=None)
-            
+            # Convert to TIFF first (let converter create temp file).
+            # Salvage EXIF from the DNG since the raw->TIFF step drops metadata.
+            tiff_path, gpr_exif = self.gpr_converter.convert(input_path, output_path=None, return_exif=True)
+
             try:
                 # Process the TIFF using inferencer exactly like inference.py
                 # The inferencer.process_image method will handle tiling for large images
-                output_img = self.inferencer.process_image(tiff_path, output_path, progress_callback=progress_callback, save_options=jpeg_options)
+                output_img = self.inferencer.process_image(tiff_path, output_path, progress_callback=progress_callback, save_options=jpeg_options, exif=gpr_exif)
             finally:
                 # Clean up temp TIFF
                 if tiff_path and tiff_path.exists():
@@ -103,7 +104,11 @@ class ImageProcessor:
                 from PIL import Image
                 img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
-                img.save(jpeg_path, 'JPEG', **(jpeg_options or {'quality': 95}))
+                save_kw = dict(jpeg_options or {'quality': 95})
+                exif = self.inferencer._extract_exif(img)
+                if exif:
+                    save_kw['exif'] = exif
+                img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
@@ -119,7 +124,11 @@ class ImageProcessor:
                 from PIL import Image
                 img = Image.open(output_path)
                 jpeg_path = output_path.with_suffix('.jpg')
-                img.save(jpeg_path, 'JPEG', **(jpeg_options or {'quality': 95}))
+                save_kw = dict(jpeg_options or {'quality': 95})
+                exif = self.inferencer._extract_exif(img)
+                if exif:
+                    save_kw['exif'] = exif
+                img.save(jpeg_path, 'JPEG', **save_kw)
                 if output_path != jpeg_path:
                     output_path.unlink()
                 return jpeg_path
