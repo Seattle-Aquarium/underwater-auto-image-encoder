@@ -186,6 +186,41 @@ a = Analysis(
     noarchive=False,
 )
 
+# Prune CUDA DLLs that a GPU *inference* app never loads (Windows cu121 build).
+# This keeps full CUDA support while cutting the bundle size below the 2GB
+# GitHub release-asset limit. Sizes below are approximate for torch cu121.
+#   - cudnn *_train* DLLs: training-only sublibraries, loaded lazily by
+#     cudnn64_8.dll at runtime (never at import), so safe to drop (~300-500MB)
+#
+# CAUTION: torch import-loads *every* DLL in torch/lib on Windows, and
+# torch_cuda.dll has load-time deps on cublas/cudnn(core)/cufft/curand/
+# cusolver/cusparse. Dropping any of those breaks `import torch` outright
+# (WinError 126 at startup) — only lazily-loaded leaf DLLs are safe to prune.
+#
+# NOTE: CI runners have no GPU, so the smoke test will NOT catch a runtime
+#       (GPU-only) breakage. Verify a pruned build on a real CUDA machine.
+if system == 'windows':
+    cuda_drop_tokens = (
+        'cudnn_ops_train',
+        'cudnn_cnn_train',
+        'cudnn_adv_train',
+    )
+    kept = []
+    dropped_bytes = 0
+    for b in a.binaries:
+        name = os.path.basename(b[0]).lower()
+        if any(tok in name for tok in cuda_drop_tokens):
+            try:
+                dropped_bytes += os.path.getsize(b[1])
+            except OSError:
+                pass
+            print(f"  - dropping CUDA DLL: {os.path.basename(b[0])}")
+            continue
+        kept.append(b)
+    print(f"✓ Pruned {len(a.binaries) - len(kept)} CUDA DLLs "
+          f"(~{dropped_bytes / (1024 * 1024):.0f} MB)")
+    a.binaries = kept
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 if system == 'darwin':
